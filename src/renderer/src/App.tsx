@@ -26,6 +26,8 @@ function loadYouTubeApi(): Promise<any> {
   return apiPromise
 }
 
+type Phase = 'idle' | 'loading' | 'ready' | 'downloading'
+
 function fmtSpeed(bytesPerSec: number): string {
   if (bytesPerSec >= 1024 * 1024) return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`
   return `${Math.max(1, Math.round(bytesPerSec / 1024))} KB/s`
@@ -45,7 +47,8 @@ export default function App() {
   const [startText, setStartText] = useState('00:00:00')
   const [endText, setEndText] = useState('00:00:00')
   const [height, setHeight] = useState<number | null>(null)
-  const [status, setStatus] = useState('')
+  const [phase, setPhase] = useState<Phase>('idle')
+  const [error, setError] = useState<string | null>(null)
   const [savedPath, setSavedPath] = useState<string | null>(null)
   const [progress, setProgress] = useState<ProgressUpdate | null>(null)
   const [sizeEstimate, setSizeEstimate] = useState<number | null>(null)
@@ -104,9 +107,11 @@ export default function App() {
 
   async function load() {
     if (!url.trim()) return
+    setPhase('loading')
+    setError(null)
+    setSavedPath(null)
+    setProgress(null)
     try {
-      setStatus('Loading…')
-      setProgress(null)
       const i = await window.yt.getInfo(url)
       if (!i.id) throw new Error('Could not extract video ID')
       setInfo(i)
@@ -115,7 +120,6 @@ export default function App() {
       setStart(0)
       setStartText('00:00:00')
       setHeight(i.qualities[0] ?? null)
-      setStatus('')
 
       try {
         playerRef.current?.destroy()
@@ -126,28 +130,29 @@ export default function App() {
         width: '100%',
         height: '100%'
       })
+      setPhase('ready')
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : String(err))
+      setInfo(null)
+      setPhase('idle')
+      setError(err instanceof Error ? err.message : String(err))
     }
   }
 
   async function download() {
     if (!info || height == null) return
+    setPhase('downloading')
+    setError(null)
+    setSavedPath(null)
+    setProgress(null)
     try {
-      setStatus('Downloading…')
-      setProgress(null)
       const totalBytes = sizeEstimate ?? estimateBytes((info.bitrates[height] ?? 0) + info.audioTbr, end - start)
       const res = await window.yt.download({ url, height, startSec: start, endSec: end, title: info.title, totalBytes })
-      if (res.canceled) {
-        setStatus('')
-        setSavedPath(null)
-      } else {
-        setStatus('')
-        setSavedPath(res.filePath ?? null)
-      }
+      setPhase('ready')
+      setSavedPath(res.canceled ? null : (res.filePath ?? null))
     } catch (err) {
+      setPhase('ready')
       setSavedPath(null)
-      setStatus(err instanceof Error ? err.message : String(err))
+      setError(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -161,20 +166,32 @@ export default function App() {
   const duration = info?.duration ?? 0
 
   return (
-    <div style={{ padding: 20, fontFamily: 'system-ui, sans-serif', maxWidth: 900, margin: '0 auto' }}>
+    <div style={{ padding: 20, maxWidth: 900, margin: '0 auto' }}>
       <h1 style={{ fontSize: 20 }}>YT Clip Trimmer</h1>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         <input
-          style={{ flex: 1, padding: 8 }}
+          style={{ flex: 1 }}
           placeholder="Paste YouTube URL"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
         />
-        <button style={{ padding: '8px 16px' }} onClick={load} disabled={!url.trim()}>
-          Load
+        <button className="btn-primary" onClick={load} disabled={!url.trim() || phase === 'loading'}>
+          {phase === 'loading' ? 'Loading…' : 'Load'}
         </button>
       </div>
+
+      {error && (
+        <div className="error-banner" style={{ marginBottom: 16 }}>
+          <span>{error}</span>
+          <button
+            onClick={() => setError(null)}
+            style={{ marginLeft: 'auto', background: 'none', border: 'none', boxShadow: 'none', padding: '0 4px', color: 'inherit' }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {info && (
         <div style={{ marginBottom: 8 }}>
@@ -182,15 +199,26 @@ export default function App() {
         </div>
       )}
 
-      <div ref={playerHostRef} className="player-host" />
+      <div style={{ position: 'relative' }}>
+        <div ref={playerHostRef} className="player-host" />
+        {phase === 'loading' && (
+          <div className="player-overlay">
+            <div className="spinner" />
+            <span>Loading video info…</span>
+          </div>
+        )}
+        {phase === 'idle' && !info && (
+          <div className="player-overlay">Paste a YouTube URL and click Load</div>
+        )}
+      </div>
 
       {info && (
         <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
-            <button style={{ marginRight: 8 }} onClick={() => setFromPlayer('start')}>
+            <button className="btn-secondary" style={{ marginRight: 8 }} onClick={() => setFromPlayer('start')}>
               Set start (current time)
             </button>
-            <button style={{ marginRight: 8 }} onClick={() => setFromPlayer('end')}>
+            <button className="btn-secondary" style={{ marginRight: 8 }} onClick={() => setFromPlayer('end')}>
               Set end (current time)
             </button>
           </div>
@@ -209,7 +237,7 @@ export default function App() {
                   }
                 }}
                 onBlur={() => setStartText(formatHMS(start))}
-                style={{ width: 90, padding: 6, textAlign: 'center' }}
+                style={{ width: 90, textAlign: 'center' }}
               />
             </label>
             <label>
@@ -225,10 +253,10 @@ export default function App() {
                   }
                 }}
                 onBlur={() => setEndText(formatHMS(end))}
-                style={{ width: 90, padding: 6, textAlign: 'center' }}
+                style={{ width: 90, textAlign: 'center' }}
               />
             </label>
-            <span style={{ color: '#999' }}>HH:MM:SS</span>
+            <span style={{ color: 'var(--muted-foreground)' }}>HH:MM:SS</span>
           </div>
 
           <div className="scrubber">
@@ -244,18 +272,18 @@ export default function App() {
 
           <div style={{ display: 'flex', gap: 24 }}>
             <div>
-              <span style={{ marginRight: 6, color: '#999' }}>Start:</span>
+              <span style={{ marginRight: 6, color: 'var(--muted-foreground)' }}>Start:</span>
               <button onClick={() => applyStart(start - 1)}>−1s</button>
               <button onClick={() => applyStart(start + 1)}>+1s</button>
             </div>
             <div>
-              <span style={{ marginRight: 6, color: '#999' }}>End:</span>
+              <span style={{ marginRight: 6, color: 'var(--muted-foreground)' }}>End:</span>
               <button onClick={() => applyEnd(end - 1)}>−1s</button>
               <button onClick={() => applyEnd(end + 1)}>+1s</button>
             </div>
           </div>
 
-          <div style={{ color: '#999' }}>
+          <div style={{ color: 'var(--muted-foreground)' }}>
             {sizeEstimate != null && sizeEstimate > 0 && <div>Estimated size: {fmtBytes(sizeEstimate)}</div>}
             <div>Clip duration: {formatHMS(Math.max(0, end - start))}</div>
           </div>
@@ -269,41 +297,52 @@ export default function App() {
                 </option>
               ))}
             </select>
-            <button
-              style={{ marginLeft: 16, padding: '8px 16px' }}
-              onClick={download}
-              disabled={end <= start}
-            >
-              Download clip
-            </button>
+            {phase === 'downloading' ? (
+              <button className="btn-primary" style={{ marginLeft: 16 }} onClick={() => window.yt.cancelDownload()}>
+                Cancel
+              </button>
+            ) : (
+              <button
+                className="btn-primary"
+                style={{ marginLeft: 16 }}
+                onClick={download}
+                disabled={end <= start}
+              >
+                Download clip
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      {progress && (
-        <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <progress value={progress.pct} max={100} style={{ width: 300 }} />
-          <span>{progress.pct.toFixed(1)}%</span>
-          {progress.total > 0 && (
-            <span style={{ color: '#999' }}>
-              · {fmtBytes(Math.min(progress.downloaded, progress.total))} / {fmtBytes(progress.total)}
-            </span>
+      {phase === 'downloading' && (
+        <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div className="spinner" />
+          <span style={{ color: 'var(--muted-foreground)' }}>Downloading…</span>
+          {progress && (
+            <>
+              <progress value={progress.pct} max={100} style={{ width: 220 }} />
+              <span>{progress.pct.toFixed(1)}%</span>
+              {progress.total > 0 && (
+                <span style={{ color: 'var(--muted-foreground)' }}>
+                  · {fmtBytes(Math.min(progress.downloaded, progress.total))} / {fmtBytes(progress.total)}
+                </span>
+              )}
+              {progress.speed > 0 && <span style={{ color: 'var(--muted-foreground)' }}>· {fmtSpeed(progress.speed)}</span>}
+            </>
           )}
-          {progress.speed > 0 && <span style={{ color: '#999' }}>· {fmtSpeed(progress.speed)}</span>}
         </div>
       )}
 
       {savedPath && (
         <div style={{ marginTop: 16 }}>
-          <div style={{ color: '#9f9' }}>Saved to {savedPath}</div>
+          <div style={{ color: 'var(--success)' }}>Saved to {savedPath}</div>
           <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
             <button onClick={() => window.yt.openFolder(savedPath)}>Open folder</button>
             <button onClick={() => window.yt.openVideo(savedPath)}>Open video</button>
           </div>
         </div>
       )}
-
-      {status && <p style={{ marginTop: 12, color: '#f66' }}>{status}</p>}
     </div>
   )
 }

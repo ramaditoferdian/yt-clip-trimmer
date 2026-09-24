@@ -4,23 +4,110 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>YT Clip Trimmer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
     <style>
       :root {
         color-scheme: dark;
+        --background: 220 20% 4%;
+        --foreground: 0 0% 100%;
+        --card: 220 18% 7%;
+        --primary: 330 93% 56%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 42 100% 48%;
+        --secondary-foreground: 0 0% 0%;
+        --muted: 220 15% 13%;
+        --muted-foreground: 215 15% 75%;
+        --accent: 220 15% 16%;
+        --accent-foreground: 0 0% 100%;
+        --destructive: 0 84% 60%;
+        --destructive-foreground: 0 0% 100%;
+        --success: 150 55% 45%;
+        --border: 220 15% 22%;
+        --input: 220 15% 12%;
+        --ring: 330 93% 56%;
+        --radius: 12px;
       }
+
       body {
         margin: 0;
-        background: #0f1115;
-        color: #e6e6e6;
+        background: hsl(var(--background));
+        color: hsl(var(--foreground));
+        font-family: 'Inter', system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
       }
+
+      h1,
+      h2,
+      h3,
+      h4 {
+        font-family: 'Space Grotesk', system-ui, sans-serif;
+      }
+
       button {
         cursor: pointer;
+        background: hsl(var(--accent));
+        color: hsl(var(--accent-foreground));
+        border: 1px solid hsl(var(--border));
+        border-radius: calc(var(--radius) - 4px);
+        padding: 6px 12px;
+        font-family: inherit;
+        box-shadow: 3px 3px 0 0 hsl(var(--border));
+        transition: transform 0.06s ease, box-shadow 0.06s ease;
       }
+      button:hover {
+        transform: translate(-1px, -1px);
+        box-shadow: 4px 4px 0 0 hsl(var(--border));
+      }
+      button:active {
+        transform: translate(1px, 1px);
+        box-shadow: 1px 1px 0 0 hsl(var(--border));
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible {
+        outline: 2px solid hsl(var(--ring));
+        outline-offset: 2px;
+      }
+
+      .btn-primary {
+        background: hsl(var(--primary));
+        color: hsl(var(--primary-foreground));
+        border-color: hsl(var(--primary));
+      }
+      .btn-secondary {
+        background: hsl(var(--secondary));
+        color: hsl(var(--secondary-foreground));
+        border-color: hsl(var(--secondary));
+      }
+
+      input,
+      select {
+        background: hsl(var(--input));
+        color: hsl(var(--foreground));
+        border: 1px solid hsl(var(--border));
+        border-radius: calc(var(--radius) - 4px);
+        padding: 6px 8px;
+        font-family: inherit;
+      }
+
       .player-host {
         position: relative;
         aspect-ratio: 16 / 9;
-        background: #000;
-        border-radius: 8px;
+        background: hsl(var(--card));
+        border: 1px solid hsl(var(--border));
+        border-radius: var(--radius);
+        overflow: hidden;
         margin-bottom: 16px;
       }
       .player-host iframe {
@@ -30,6 +117,7 @@
         height: 100%;
         border: 0;
       }
+
       .scrubber {
         position: relative;
         height: 12px;
@@ -46,10 +134,56 @@
       .scrubber__track {
         left: 0;
         right: 0;
-        background: #3a3f47;
+        background: hsl(var(--border));
       }
       .scrubber__fill {
-        background: #5b9bd5;
+        background: hsl(var(--primary));
+      }
+
+      progress {
+        accent-color: hsl(var(--primary));
+      }
+
+      .spinner {
+        width: 22px;
+        height: 22px;
+        border: 2px solid hsl(var(--border));
+        border-top-color: hsl(var(--primary));
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .player-overlay {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        background: hsl(var(--card));
+        border: 1px dashed hsl(var(--border));
+        border-radius: var(--radius);
+        color: hsl(var(--muted-foreground));
+        font-size: 14px;
+        text-align: center;
+        padding: 20px;
+      }
+
+      .error-banner {
+        background: hsl(var(--destructive) / 0.12);
+        border: 1px solid hsl(var(--destructive));
+        color: hsl(var(--destructive));
+        border-radius: calc(var(--radius) - 4px);
+        padding: 8px 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
       }
     </style>
   </head>

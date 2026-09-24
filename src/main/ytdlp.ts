@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { rm } from 'node:fs/promises'
 import { ytdlpPath, ffmpegPath } from './binaries'
 import {
   buildFormatExpr,
@@ -103,6 +104,14 @@ export async function estimateSectionSize(url: string, height: number, startSec:
   return estimateSectionBytes(video, startSec, endSec) + estimateSectionBytes(audio, startSec, endSec)
 }
 
+let activeChild: ReturnType<typeof spawn> | null = null
+let cancelRequested = false
+
+export function cancelDownload(): void {
+  cancelRequested = true
+  activeChild?.kill()
+}
+
 export async function downloadSection(
   url: string,
   height: number,
@@ -111,7 +120,7 @@ export async function downloadSection(
   totalBytes: number,
   outPath: string,
   onProgress: (p: ProgressUpdate) => void
-): Promise<void> {
+): Promise<boolean> {
   const { videoUrl, audioUrl } = await getStreamUrls(url, height)
   const duration = endSec - startSec
   const args = [
@@ -127,8 +136,10 @@ export async function downloadSection(
     '-nostats',
     outPath
   ]
+  cancelRequested = false
   await new Promise<void>((resolve, reject) => {
     const child = spawn(ffmpegPath() ?? 'ffmpeg', args, { windowsHide: true })
+    activeChild = child
     let stderr = ''
     let currentSize = 0
     let lastSize = 0
@@ -159,13 +170,22 @@ export async function downloadSection(
       }
     })
     child.stderr.on('data', (d) => (stderr += d.toString()))
-    child.on('error', reject)
+    child.on('error', (err) => {
+      activeChild = null
+      reject(err)
+    })
     child.on('close', (code) => {
-      if (code === 0) resolve()
+      activeChild = null
+      if (cancelRequested || code === 0) resolve()
       else {
         const tail = stderr.trim().split('\n').slice(-3).join(' ')
         reject(new Error(tail || 'ffmpeg failed'))
       }
     })
   })
+  if (cancelRequested) {
+    await rm(outPath, { force: true }).catch(() => {})
+    return true
+  }
+  return false
 }

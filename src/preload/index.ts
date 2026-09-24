@@ -4,6 +4,7 @@ import type { DownloadPayload, DownloadResult, ProgressUpdate, VideoInfo } from 
 contextBridge.exposeInMainWorld('yt', {
   getInfo: (url: string): Promise<VideoInfo> => ipcRenderer.invoke('yt:info', url),
   download: (payload: DownloadPayload): Promise<DownloadResult> => ipcRenderer.invoke('yt:download', payload),
+  cancelDownload: (): void => ipcRenderer.send('yt:cancel'),
   estimateSize: (url: string, height: number, startSec: number, endSec: number): Promise<number> =>
     ipcRenderer.invoke('yt:size', url, height, startSec, endSec),
   openFolder: (filePath: string): Promise<void> => ipcRenderer.invoke('yt:open-folder', filePath),

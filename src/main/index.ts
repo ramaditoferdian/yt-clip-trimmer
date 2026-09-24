@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { join } from 'node:path'
-import { getInfo, downloadSection, estimateSectionSize } from './ytdlp'
+import { getInfo, downloadSection, estimateSectionSize, cancelDownload } from './ytdlp'
 import { buildClipFilename } from '../shared/format'
 import type { DownloadPayload, DownloadResult } from '../shared/types'
 
@@ -47,11 +47,13 @@ app.whenReady().then(() => {
       : await dialog.showSaveDialog(saveOpts)
     if (canceled || !filePath) return { canceled: true }
 
-    await downloadSection(payload.url, payload.height, payload.startSec, payload.endSec, payload.totalBytes, filePath, (p) => {
+    const wasCanceled = await downloadSection(payload.url, payload.height, payload.startSec, payload.endSec, payload.totalBytes, filePath, (p) => {
       e.sender.send('yt:progress', p)
     })
-    return { canceled: false, filePath }
+    return wasCanceled ? { canceled: true } : { canceled: false, filePath }
   })
+
+  ipcMain.on('yt:cancel', () => cancelDownload())
 
   ipcMain.handle('yt:size', (_e, url: string, height: number, startSec: number, endSec: number) => {
     return estimateSectionSize(url, height, startSec, endSec)

@@ -24,10 +24,10 @@ frame-exact `.mp4`. No backend service; all work happens locally on the machine.
 |----------|--------|-----------|
 | Platform | Desktop app, not Chrome extension | Native ffmpeg + bundled yt-dlp; avoids ffmpeg.wasm size/speed and MV3 service-worker limits. |
 | Framework | Electron (JS/TS) | Matches existing workspace skills; trivial `child_process.spawn`. |
-| Preview mechanism | Progressive stream → `<video>` (option A) | Simplest, audio+video up to 720p, native seek. 1080p preview via MSE is a future upgrade. |
+| Preview mechanism | YouTube iframe embed + Player API | Audio+video, full seek, zero download before preview. Official player; preview quality handled by YouTube. |
 | Trim precision | Frame-exact (re-encode) | Cuts land exactly at chosen timestamps; slower encode accepted. |
-| Download engine | yt-dlp | Already does format selection + section download (`--download-sections`). |
-| Trim engine | ffmpeg (invoked by yt-dlp) | Frame-exact cuts via `--force-keyframes-at-cuts`. |
+| Download engine | yt-dlp (HLS URLs) + ffmpeg | yt-dlp resolves HLS video+audio m3u8; ffmpeg downloads only the section's segments. |
+| Trim engine | ffmpeg (direct) | Frame-exact cut via `-ss`/`-t` re-encode on the HLS stream. |
 
 ## Architecture
 
@@ -48,7 +48,7 @@ Renderer (React)  <--IPC/contextBridge-->  Main (Node)  --spawn-->  yt-dlp / ffm
 **Renderer (`src/renderer/App.tsx`)**
 
 - URL input.
-- `<video>` player for preview (stream URL from `getStreamUrl`).
+- YouTube iframe embed (`YT.Player` from `https://www.youtube.com/embed/<id>`).
 - Start/end range controls (sliders or time inputs), validated against duration.
 - Quality dropdown, populated from `getInfo`.
 - Download button + progress bar.
@@ -56,21 +56,20 @@ Renderer (React)  <--IPC/contextBridge-->  Main (Node)  --spawn-->  yt-dlp / ffm
 
 **Preload (`src/preload/index.ts`)**
 
-- `getInfo(url)`, `getStreamUrl(url)`, `downloadSection(url, formatId, start, end)`, `onProgress(cb)`.
+- `getInfo(url)`, `download(url, height, startSec, endSec)`, `onProgress(cb)`.
 
 **Main (`src/main/`)**
 
 - `index.ts` — BrowserWindow setup + IPC wiring.
 - `ytdlp.ts` — spawn wrappers:
-  - `getInfo(url)` → `yt-dlp -J <url>` → title, duration, `formats` (id + quality label).
-  - `getStreamUrl(url)` → `yt-dlp -f "best[acodec!=none][vcodec!=none][ext=mp4]/best[acodec!=none]" -g <url>`.
-  - `downloadSection(url, formatId, start, end)` → `yt-dlp -f <formatId> --download-sections "*START-END" --force-keyframes-at-cuts -o <out>`, streaming progress via yt-dlp progress hook.
+  - `getInfo(url)` → `yt-dlp -J <url>` → id, title, duration, `qualities` (heights).
+  - `downloadSection(url, height, start, end)` → resolve HLS video+audio URLs via `yt-dlp -g`, then `ffmpeg -ss/-t` re-encode (progress via `-progress`).
 - `binaries.ts` — resolve bundled yt-dlp/ffmpeg paths (platform-aware).
 
 ## Data flow
 
 1. User pastes URL → `getInfo` → show title + quality list.
-2. `getStreamUrl` → set `<video src>` → user plays/scrubs the full video.
+2. `getInfo` returns video `id` → renderer embeds `https://www.youtube.com/embed/<id>` (Player API) → user plays/scrubs the full video.
 3. User sets start/end → validated `< duration`, `start < end`.
 4. User picks quality → clicks download → `downloadSection`.
 5. Progress hook → renderer progress bar.
@@ -78,40 +77,44 @@ Renderer (React)  <--IPC/contextBridge-->  Main (Node)  --spawn-->  yt-dlp / ffm
 
 ## Preview mechanism (detail)
 
-`yt-dlp -f "best[acodec!=none][vcodec!=none][ext=mp4]/best[acodec!=none]" -g` returns a
-combined progressive mp4 URL (up to 720p, audio+video) that `<video>` plays directly.
+Preview uses the official YouTube iframe embed with the Player API (`enablejsapi=1`),
+not a raw stream. `getInfo` returns the video `id` (yt-dlp parses the pasted URL), and
+the renderer creates `YT.Player` from `https://www.youtube.com/embed/<id>`. This gives
+audio + video, full seeking, and zero download before preview.
 
-- **Fallback:** if no progressive format exists, use video-only DASH (no audio) and
-  show a note.
-- **Expiry:** googlevideo URLs are short-lived; re-fetch the stream URL on play.
-- **Upgrade path:** 1080p+audio preview via MediaSource Extensions (video-only DASH +
-  audio-only), if 720p preview proves insufficient.
+- **Start/end capture:** `player.getCurrentTime()` on button click; sliders call
+  `player.seekTo()`.
+- **Caveat:** videos that disallow embedding, or age-restricted videos, may not render
+  in the iframe — surface an error if the player never becomes ready.
 
 ## Download & trim (detail)
 
-`yt-dlp -f <formatId> --download-sections "*START-END" --force-keyframes-at-cuts -o <out>`
-downloads only the selected range and re-encodes so cuts are frame-exact.
-`--force-keyframes-at-cuts` trades speed for accuracy (the locked decision).
+Section-only download (no full download). yt-dlp resolves the HLS video + audio
+playlists, then ffmpeg seeks into those playlists — downloading only the segments that
+cover the selected range — and re-encodes frame-exactly.
 
-- Start/end are formatted as timestamps (`HH:MM:SS`) into `*start-end`.
-- yt-dlp invokes ffmpeg internally; ffmpeg must be resolvable in `PATH` (we pass its
-  bundled path explicitly).
+1. `yt-dlp -f "bv*[height<=N][vcodec^=avc1][protocol=m3u8_native]+ba[protocol=m3u8_native]/b[height<=N]" -g <url>` → video + audio m3u8 URLs.
+2. `ffmpeg -ss START -i <video> -ss START -i <audio> -t DUR -c:v libx264 -c:a aac -movflags +faststart <out>`.
+
+- HLS is segment-based, so ffmpeg `-ss` skips straight to the relevant segments (DASH
+  mp4 seeking hangs — that's why we force HLS).
+- avc1 + re-encode keeps the container mp4 and makes cuts frame-exact.
+- Cap: HLS tops out at 1080p (no 1440p/4K via HLS).
 
 ## Error handling
 
 - Missing yt-dlp/ffmpeg binaries → clear message + reinstall guidance.
 - Invalid / age-restricted / private / geo-blocked URL → parse yt-dlp `stderr`, show a
   friendly message.
-- Stream URL expired → re-fetch on play.
-- No progressive format → video-only fallback + note.
+- Preview embed fails to load (video disallows embedding / age-restricted) → show a message.
 - Download failure mid-run → surface `stderr` + retry button.
 
 ## Testing
 
 One runnable self-check (no framework):
 
-- Timestamp parsing: `start/end` → yt-dlp `*start-end` string.
-- Format selection: picking the best progressive format id from `formats`.
+- ffmpeg progress parsing: `parseFfmpegProgress` (`out_time_us`/`out_time_ms` → seconds).
+- Format selection: `buildFormatExpr(height)` + `extractHeights` for the download step.
 
 Manual integration check: run `getInfo` + `downloadSection` against a public YouTube
 URL (`--simulate`) and verify the trim lands at the chosen timestamps.
@@ -144,6 +147,6 @@ yt-clip-trimmer/
 ## Out of scope (YAGNI)
 
 - Playlists, subtitles, metadata management.
-- 1080p preview with audio (MSE) — future upgrade.
+- Non-embeddable preview fallback (download-to-temp).
 - Fast (keyframe-snap) trim toggle — future option.
 - Auto-update, analytics, telemetry.
